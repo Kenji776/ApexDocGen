@@ -1,0 +1,8 @@
+{
+     "projectName": "Your Project Name Here",
+     "inputDir": "input",
+     "outputDir": "output",
+     "workingDir": "temp",
+     "source": "Local file path to your Apex classes. EX C:\\username\\documents\\salesforceProjects\\projectName\\force-app\\main\\default\\classes",
+     "files": []
+}
