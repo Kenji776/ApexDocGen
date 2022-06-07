@@ -4,5 +4,7 @@
      "outputDir": "output",
      "workingDir": "temp",
      "source": "Local file path to your Apex classes. EX C:\\username\\documents\\salesforceProjects\\projectName\\force-app\\main\\default\\classes",
-     "files": []
+     "files": [],
+	 "markdownGenerator":"jekyll",
+	 "theme": "github-dark"
 }

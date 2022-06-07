@@ -1,3 +1,9 @@
+/**
+*@Name Apex Docgen
+*@Author Kenji776
+*@Description script for automatically generating code documentation from apex classes. I realize it's not the best written thing and it ends up in callback hell a little bit but since its a totally
+* linear script and the nesting doesn't go too deep I think its ok for now. Should refactor with promises later.
+*/
 const configFile = 'config.json';
 const fs = require('fs');
 const path = require('path')
@@ -10,36 +16,58 @@ const stat = promisify(fs.stat);
 let config = [];
 
 
-function init(){
-	log('                                    Apex DocGen 1.0!\r\n',true,'green');
+async function init(){
+	log('                                    Apex DocGen 2.0!\r\n',true,'green');
 
 	
 	var d = new Date();
 	d.toLocaleString();  
 	
 	log('Started process at ' + d, false);
-		
-	loadConfig();
+	log('In the process hangs during PDF or markdown generation make sure you do not have copies of those files open from your previous run!');
+	loadConfig(configFile);
 	
-	importFilesFromJson();
+	importFilesFromJson(config.source,config.files);
 
+	//create our markdown files from the apex classes.
 	generateMarkdown(function(error, stdout, stderr){
 		log(stdout);
 		log('Generated Markdown files!');
 		
-		fixMarkdownLinks();
-		
-		generatePDFs();	
+				
+		generateHTML(config.workingDir+'\\markdown', function(complete){
+			console.log('Markdown to HTML Complete');
+			
+			copyRecursiveSync(config.workingDir+'\\markdown',config.workingDir+'\\html');
+			
+			removeFilesOfTypeFromFolderTree(getFilesRecursively(config.workingDir+'\\html'),['md'],function(){
+				log('Finished cleaning up markdown files from HTML folder');
+			});		
 
-		generateFileJson();
+			removeFilesOfTypeFromFolderTree(getFilesRecursively(config.workingDir+'\\markdown'),['html'],function(){
+				log('Finished cleaning up HTML files from markdown folder');
+			});	
+			
+			fixHtml(config.workingDir+'\\html','.md','.html');
+			
+			//create the zip file name
+			var date = new Date();
+			var newdate= (date.getMonth() + 1) + '_' + date.getDate() + '_' +  date.getFullYear();
+			let zipFileName = config.projectName + ' ' + newdate; 
+	
+			//create the zip file.
+			zipOutput(config.workingDir, config.outputDir, zipFileName);
+			
+			generateFileJson();
+		});
 	});
 }
 
 //loads the configuration data from the JSON file.
-function loadConfig(){
+function loadConfig(configFileName){
 	log('Loading Configs', true);
 	
-	const configJSON = fs.readFileSync(configFile, 'utf-8', function(err){
+	const configJSON = fs.readFileSync(configFileName, 'utf-8', function(err){
 		log('Config file not found or unreadable. Skipping import' + err.message, true, 'yellow');
 
 		if (err) throw err;
@@ -47,17 +75,12 @@ function loadConfig(){
 
 	config = JSON.parse(configJSON);
 	
-	//create working directory if it doesn't exist
-	if (!fs.existsSync(config.workingDir)){
-		fs.mkdirSync(config.workingDir);
-		log('Working folder not found. Creating',true,'yellow');	
-	}	
-
-	//create output directory if it doesn't exist
-	if (!fs.existsSync(config.outputDir)){
-		fs.mkdirSync(config.outputDir);
-		log('Output folder not found. Creating',true,'yellow');	
-	}	
+	//create needed directories
+	if (!fs.existsSync(config.workingDir)) fs.mkdirSync(config.workingDir);		
+	if (!fs.existsSync(config.workingDir+'/markdown')) fs.mkdirSync(config.workingDir+'/markdown');	
+	if (!fs.existsSync(config.workingDir+'/html')) fs.mkdirSync(config.workingDir+'/html');		
+	if (!fs.existsSync(config.outputDir)) fs.mkdirSync(config.outputDir);
+	fs.copyFileSync(`themes\\${config.theme+'.css'}`, config.workingDir+'\\html\\styles.css');
 
 	//create input directory if it doesn't exist
 	if (!fs.existsSync(config.inputDir)){
@@ -71,12 +94,17 @@ function generateMarkdown(callback){
 
 	log('Generating Markdown files', true);
 	
-	runCommand(`apexdocs-generate -s ${config.inputDir} -t ${config.workingDir}`,function(error, stdout, stderr){
+	runCommand(`apexdocs-generate -s ${config.inputDir} -t ${config.workingDir}\\markdown\\ -r --scope public global namespaceaccessible -g ${config.markdownGenerator}`,function(error, stdout, stderr){
 		log('Markdown files generated successfully', true);
 		callback(error, stdout, stderr);
 	});
 }
 
+
+
+/**
+* @Description Reads all the files in the local input folder and writes them into the config json.
+*/
 function generateFileJson(){
 	const filesArray = fs.readdirSync(config.inputDir);
 
@@ -94,7 +122,12 @@ function generateFileJson(){
 	});	
 }
 
-function importFilesFromJson(){
+/**
+* @Description Reads all the given files from the source folder into the local input folder.
+* @Param sourceFolder the full path on the system to read files from
+* @Param files the names of all the files to copy
+*/
+function importFilesFromJson(sourceFolder, files){
 
 	log('Reading files for import from ' + configFile);
 
@@ -104,8 +137,8 @@ function importFilesFromJson(){
 			return;
 		}
 
-		for(const fileName of config.files) {
-			let filePath = config.source + '\\' + fileName;
+		for(const fileName of files) {
+			let filePath = sourceFolder + '\\' + fileName;
 
 			log('Copying ' + filePath);
 			try{
@@ -122,97 +155,185 @@ function importFilesFromJson(){
 	}
 }
 
-function generatePDFs(){
+
+/**
+* @Description Generates HTML files for all markdown files in the given folder.
+* @Param directory the folder to find markdown files in.
+* @Param callback function to call when all processing is complete
+* @Return void. Use callback instead.
+*/
+function generateHTML(directory, callback){
 	
-	log('Generating PDF files!');
-	let files = getFilesRecursively(config.workingDir);
+	log('Generating HTML files!');
+	let files = getFilesRecursively(directory);
 	
 	var numFiles = files.length;
 	
 	log('Found ' + numFiles + ' files to generate PDF for');
 	
-	generatePDF(0,files,function(success){
-		log('PDf Generation Done');
-		zipOutput();
+	convertMarkdownToHtml(files,function(success){
+		log('HTML Generation Done');
+		if(callback) callback(true);
 	});
 }
-
-function generatePDF(fileIndex,files,callback){
+/**
+* @Description Generates HTML files from all given markdown files.
+* @Param files list of all files to potentially generate HTML from 
+* @Param callback function to call when all processing is complete
+* @Param fileIndex internal tracking for what file to evaluate. Do not set.
+* @Return void. Use callback instead.
+*/
+function convertMarkdownToHtml(files,callback,fileIndex){
 	
-	if(fileIndex > files.length) return null;
-	const fileName = files[fileIndex];
-	const fileExt = fileName.substring(fileName.lastIndexOf('.')+1, fileName.length) || fileName;
+	if(!fileIndex) fileIndex = 0;
+	if(fileIndex > files.length) {
+		callback(null);
+	}
 	
-	if(fileExt == 'md'){	
-		runCommand(`mdpdf ${fileName}` ,function(error, stdout, stderr){
+	else{
+		const fileName = files[fileIndex];
+		const fileNameParts = fileName.split('.');
+		const fileNameNoExt = fileNameParts[0];
+		const fileExt = fileNameParts[1];
+		
+	
+		if(fileExt == 'md'){	
+		
+			runCommand(`markdown ${fileName} >${fileNameNoExt}.html --flavor markdown --highlight true --stylesheet styles.css` ,function(error, stdout, stderr){
+				fileIndex++;
+				if(fileIndex < files.length) convertMarkdownToHtml(files,callback,fileIndex);
+				else callback(true);
+			});	
+		}else{
 			fileIndex++;
-			log('Finished Generating PDF for: ' + fileName);	
-			if(fileIndex < files.length) generatePDF(fileIndex,files,callback);
-			else callback(true);
-		});	
-	}else{
-		fileIndex++;
-		if(fileIndex < files.length) generatePDF(fileIndex,files,callback);
-		else callback(true);		
+			if(fileIndex < files.length) convertMarkdownToHtml(files,callback,fileIndex);
+			else callback(true);		
+		}
 	}
 }
 
-function zipOutput(){
+
+/**
+* @Description Generates PDF files for all markdown files in the given folder.
+* @Param directory the folder to find markdown files in.
+* @Param callback function to call when all processing is complete
+* @Return void. Use callback instead.
+*/
+function generatePDFs(directory, callback){
+	
+	log('Generating PDF files!');
+	let files = getFilesRecursively(directory);
+	
+	var numFiles = files.length;
+	
+	log('Found ' + numFiles + ' files to generate PDF for');
+	
+	generatePDF(files,function(success){
+		log('PDf Generation Done');
+		if(callback) callback(true);
+	});
+}
+
+
+/**
+* @Description removes all files from the system with any of the given types 
+* @Param files an array of file paths to evaluate
+* @Param fileTypes an array of file types to delete. You do not need to include the . in the names
+* @Param callback functions to call when all operations are completed.
+* @Param fileIndex internal tracking for what file to evaluate. Do not set.
+* @Return void. Use callback instead.
+*/
+function removeFilesOfTypeFromFolderTree(files,fileTypes,callback,fileIndex,){
+	if(!fileIndex) fileIndex = 0;
+	if(fileIndex > files.length) return null;
+	const fileName = files[fileIndex];
+	const fileExt = fileName.substring(fileName.lastIndexOf('.')+1, fileName.length) || fileName;
+	if(fileTypes.includes(fileExt)) fs.unlinkSync(fileName);
+	fileIndex++;
+	if(fileIndex < files.length) removeFilesOfTypeFromFolderTree(files,fileTypes,callback,fileIndex);
+	else if(callback) callback(true);		
+
+}
+
+/**
+* @Description zips all the files in the working directory and saves the result to the output directory.
+*/
+function zipOutput(sourceDirectory,targetDirectory,fileName){
 	log('Zipping files!');
 
-	var date = new Date();
-	var newdate= (date.getMonth() + 1) + '_' + date.getDate() + '_' +  date.getFullYear();
-	
-	let zipFileName = config.projectName + ' ' + newdate; 
-	runCommand(`7z a "${config.outputDir}/${zipFileName}.zip" "${config.workingDir}/*" -r -tzip` ,function(error, stdout, stderr){
+	runCommand(`7z a "${targetDirectory}/${fileName}.zip" "${sourceDirectory}/*" -r -tzip` ,function(error, stdout, stderr){
 		log('Created Zip Archive!');
 	});	
 }
 
-function fixMarkdownLinks(){
-	log('Modifying Markdown to fix PDF links!');
-	let filesToModify = getFilesRecursively(config.workingDir);
+/**
+* @Description modifies all the markdown files in the markdown folder to fix the links
+*/
+function fixHtml(directory, sourceType, targetType){
+	let filesToModify = getFilesRecursively(directory);
 	
+	log('Changing ' + sourceType + ' link targets to ' + targetType + ' in folder ' + directory);
+		
 	for(const fileName of filesToModify){
 		
+		log('Processing links in file: ' + fileName);
 		let fileContents = fs.readFileSync(fileName, 'utf-8', function(err){
-			log('Unable to read file ' + fileName + '. Cannot adjust contents for PDF generation', true, 'yellow');
+			log('Unable to read file ' + fileName, true, 'yellow');
 			if (err) throw err;
 		});
 				
-		newFile = fileContents.replaceAll('.md','.pdf');
-		newFile = newFile.replaceAll('](/','](./');
-		
+		newFile = fileContents.replaceAll(sourceType,targetType);
+		newFile = newFile.replaceAll('<body>','<body><link rel="stylesheet" type="text/css" href="../styles.css" id="_theme"><div id="_html" class="markdown-body">');
+		newFile = newFile.replaceAll('</body>','</div></body>')
+		newFile = newFile.replaceAll('<h2 id="layout-default">layout: default</h2>','');
+		newFile = newFile.replaceAll('href="/','href="');
+		newFile = newFile.replaceAll('|Param|Description|','Param ');
+		newFile = newFile.replaceAll('|---|---|','');
+
+		newFile = unescapeHTML(newFile);
+		//fix reference to stylesheet.
+		//if(fileName != 'docs\\html\\index.html') newFile = newFile.replaceAll('styles.css','../styles.css');
+
+	
 		fs.writeFileSync(fileName, newFile, function (err) {
 			if (err) throw err;
 			log('Error Updating links in markdown file to be PDF');
 		});
 			
-		//within the files contents run the regular expression to find any links
-		
-		/*
-		const regex = /### \[(.*?)\]\(.*?\)/gm
-		const foundLinks = fileContents.match(regex);
-		
-		log(foundLinks);
-		if(foundLinks && foundLinks.length > 0){
-			log('Found ' + foundLinks.length + ' links to update to PDF targets');
-			for(let linkTarget of foundLinks){
-				log('Modifying link target!');
-				linkTarget = linkTarget.replace('.md','.pdf');
-			}
-			
-			fs.writeFileSync(fileName, fileContents, function (err) {
-				if (err) throw err;
-				log('Error Updating links in markdown file to be PDF');
-			});		
-		}*/			
-	}
-	
-	log('Markdown files updated!');
+				
+	}	
+	log('Links fixed');
+}
+function unescapeHTML(escapedHTML) {
+  return escapedHTML.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
 }
 
+/**
+* @Description Copies an entire folder and all its contents to a new destination.
+* @Param src Source to copy from
+* @Param dest destination to copy all files to.
+*/
+function copyRecursiveSync(src, dest) {
+  var exists = fs.existsSync(src);
+  var stats = exists && fs.statSync(src);
+  var isDirectory = exists && stats.isDirectory();
+  if (isDirectory) {
+    if(!fs.existsSync(dest)) fs.mkdirSync(dest);
+    fs.readdirSync(src).forEach(function(childItemName) {
+      copyRecursiveSync(path.join(src, childItemName),
+                        path.join(dest, childItemName));
+    });
+  } else {
+    fs.copyFileSync(src, dest);
+  }
+};
 
+/**
+* @Description Gets all files from a directory tree recursively.
+* @Param directory the root directory to look for files in
+* @Param files internal variable passed to each call of itself. Do not set, or set to empty array.
+* @Return an array of complete file paths for all files in the directory.
+*/
 function getFilesRecursively(directory,files) {
 	if(!files) files = [];
     fs.readdirSync(directory).forEach(File => {
@@ -226,16 +347,23 @@ function getFilesRecursively(directory,files) {
 	return files;
 }
 
-function finish()
-{
+/**
+* @Description Runs on complete. Makes final log entry and exits process.
+*/
+function finish(){
 	log('Process completed',true,'yellow');
 	log('\r\n\r\n------------------------------------------------ ', false);
 	process.exit(1);	
 }
 
-
-function runCommand(command,callback)
-{
+/**
+* @Description Executes a child process on the OS
+* @Param command a command string to pass into the system shell
+* @Param callback function to call when all processing is complete
+* @Return void. Use callback instead.
+*/
+function runCommand(command,callback){
+	log('Running command: ' + command);
 	exec(command, (error, stdout, stderr) => {
 		if (error) {
 			log('error: ' + error.message,true,'red');
@@ -244,8 +372,14 @@ function runCommand(command,callback)
 	});	
 }
 
-function log(logItem,printToScreen,color)
-{
+/**
+* @Description Creates a log entry to the log file and optionally the screen
+* @Param logItem the value to log
+* @Param printToScreen boolean flag of whether to show the log item in the console or not.
+* @Param color optional string that indicates what color to print the text to the screen in. Options are red, green, yellow.
+* @Return void. Use callback instead.
+*/
+function log(logItem,printToScreen,color){
 	printToScreen = printToScreen != null ? printToScreen : true;
 	var colorCode='';
 	switch(color) {
