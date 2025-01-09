@@ -42,7 +42,7 @@ async function init() {
     importFilesFromJson(config.source, config.files);
 
     //create our markdown files from the apex classes.
-    generateMarkdown(config.inputDir, config.workingDir+'\\markdown', function(error, stdout, stderr) {
+    generateMarkdown(config.inputDir, config.workingDir+'\\markdown', config.defaultGroupName, function(error, stdout, stderr) {
         log(stdout);
         log('Generated Markdown files!');
 
@@ -114,11 +114,12 @@ function loadConfig(configFileName) {
  * @Param targetDir target directory to write generated markdown files into
  * @Param callback the function to call when processing of files is done.
  */
-function generateMarkdown(sourceDir, targetDir, callback) {
+function generateMarkdown(sourceDir, targetDir, defaultGroupName='Miscellaneous', callback) {
 
     log('Generating Markdown files', true);
 
-    runCommand(`apexdocs-generate -s ${sourceDir} -t ${targetDir} -r --scope public global namespaceaccessible -g ${config.markdownGenerator}`, function(error, stdout, stderr) {
+//apexdocs markdown -p global public private protected namespaceaccessible -s force-app/main/default/classes
+    runCommand(`apexdocs markdown -p global public private protected namespaceaccessible -s ${sourceDir} -t ${targetDir} --defaultGroupName ${defaultGroupName}`, function(error, stdout, stderr) {
         log('Markdown files generated successfully', true);
         callback(error, stdout, stderr);
     });
@@ -160,7 +161,7 @@ function importFilesFromJson(sourceFolder, files) {
 
     try {
         if (!config.files || config.files.length == 0) {
-            log('No importable files found in file. Skipping import', true, 'yellow');
+            log('No importable files found in file property of config. Will instead use whatever exists in input directory', true, 'yellow');
             return;
         }
 
@@ -222,7 +223,8 @@ function convertMarkdownToHtml(files, callback, fileIndex) {
 
         if (fileExt == 'md') {
 
-            runCommand(`markdown ${fileName} >${fileNameNoExt}.html --flavor markdown --highlight true --stylesheet ${config.theme}.css`, function(error, stdout, stderr) {
+            //runCommand(`markdown ${fileName} --stylesheet ${config.theme}.css>${fileNameNoExt}.html`, function(error, stdout, stderr) {
+			runCommand(`markdown ${fileName} -s ${config.theme}>${fileNameNoExt}.html`, function(error, stdout, stderr) {
                 fileIndex++;
                 if (fileIndex < files.length) convertMarkdownToHtml(files, callback, fileIndex);
                 else callback(true);
@@ -277,8 +279,8 @@ function fixHtml(directory) {
         newFile = newFile.replaceAll('</body>', '</div></body>')
         newFile = newFile.replaceAll('<h2 id="layout-default">layout: default</h2>', '');
         newFile = newFile.replaceAll('href="/', 'href="');
-        newFile = newFile.replaceAll('|Param|Description|', 'Param ');
-        newFile = newFile.replaceAll('|---|---|', '');
+        //newFile = newFile.replaceAll('|Param|Description|', 'Param ');
+        //newFile = newFile.replaceAll('|---|---|', '');
         newFile = unescapeHTML(newFile);
 		
         fs.writeFileSync(fileName, newFile, function(err) {
